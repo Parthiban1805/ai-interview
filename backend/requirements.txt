@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+websockets
+python-dotenv
+pydantic-settings
+groq
+langchain
+langchain-community
+ollama
+pypdf
+python-docx
+aiofiles
+langchain-groq
