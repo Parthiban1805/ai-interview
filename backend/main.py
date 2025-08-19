@@ -1,11 +1,14 @@
+
 import os
 import uuid
 import aiofiles
+import traceback
 from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, Form
+from fastapi.middleware.cors import CORSMiddleware
 
 from connection_manager import manager
 from models.session import InterviewPhase
-from interview_flow.state_manager import create_session, get_session, advance_phase
+from interview_flow.state_manager import create_session, get_session
 from interview_flow.prompt_factory import get_system_prompt
 from interview_flow.langchain_chain import create_interview_chain
 from services.elevenlabs_service import text_to_speech_batch
@@ -14,6 +17,19 @@ from services.resume_parser import parse_resume
 
 app = FastAPI()
 os.makedirs("uploads", exist_ok=True)
+
+origins = [
+    "http://localhost:5173",
+    "http://localhost:3000", # A common port for React development
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"], # Allows all methods
+    allow_headers=["*"], # Allows all headers
+)
 
 async def speak(client_id: str, text: str):
     """Generates audio and sends it over the WebSocket."""
@@ -29,7 +45,7 @@ async def setup_interview(client_id: str, resume: UploadFile = File(...), skills
     """
     session = get_session(client_id)
     if not session:
-        return {"status": "error", "message": "Invalid session"}
+        return {"status": "error", "message": "Invalid session. Please reconnect."}
 
     try:
         # 1. Process Resume
@@ -47,7 +63,6 @@ async def setup_interview(client_id: str, resume: UploadFile = File(...), skills
         session.phase = InterviewPhase.BEHAVIORAL
         
         # 4. Kick off the interview with the first question
-        # We use the initial prompt from the behavioral phase
         system_prompt = get_system_prompt(session)
         chain = create_interview_chain(system_prompt, session.chat_memory)
         first_question = await chain.ainvoke({"input": "Start the interview now."})
@@ -56,8 +71,9 @@ async def setup_interview(client_id: str, resume: UploadFile = File(...), skills
 
         return {"status": "success", "message": "Interview setup complete. Starting now."}
     except Exception as e:
-        print(f"Error during setup: {e}")
-        return {"status": "error", "message": "Failed to set up interview."}
+        print(f"CRITICAL ERROR during setup for {client_id}: {e}")
+        traceback.print_exc()
+        return {"status": "error", "message": f"Failed to set up interview. Server error: {e}"}
 
 
 async def handle_llm_response(client_id: str, text: str):
@@ -94,12 +110,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     await manager.connect(websocket, client_id)
     session = create_session(client_id)
     
-    # Send a simple welcome message, wait for setup via HTTP
-    await speak(client_id, "Hello! I'm Alex. Please provide your resume and skills to begin.")
-
     try:
         while True:
-            # The WebSocket now ONLY handles user audio responses
             data = await websocket.receive_bytes()
             
             audio_path = f"uploads/{client_id}_audio.webm"
@@ -118,3 +130,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     except WebSocketDisconnect:
         manager.disconnect(client_id)
         print(f"Client {client_id} disconnected.")
+    except Exception as e:
+        print(f"CRITICAL ERROR in WebSocket loop for {client_id}: {e}")
+        traceback.print_exc()
+        manager.disconnect(client_id)

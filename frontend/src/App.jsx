@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { useInterviewSocket } from './hooks/useInterviewSocket';
 import { SetupForm } from './components/SetupForm';
@@ -8,7 +9,9 @@ import Transcript from './components/Transcript';
 // Enhanced AIAvatar component that reacts to the AI's status
 const AIAvatar = ({ status }) => {
     const isSpeaking = status === 'Speaking...';
-    const isThinking = status === 'Thinking...';
+    // THE FIX IS HERE: Added 'Processing...' to the thinking state
+    const isThinking = status === 'Thinking...' || status === 'Processing...';
+    const isRecording = status === 'Recording...';
 
     return (
         <div className="relative w-full h-full max-w-[320px] max-h-[320px] aspect-square mx-auto">
@@ -16,10 +19,12 @@ const AIAvatar = ({ status }) => {
             <div className={`absolute inset-0 rounded-full transition-all duration-500
                 ${isSpeaking ? 'bg-green-500/30 animate-pulse' : ''}
                 ${isThinking ? 'bg-blue-500/20 animate-spin-slow' : ''}
+                ${isRecording ? 'bg-red-500/20 animate-pulse' : ''}
             `}></div>
             <div className={`absolute inset-2 rounded-full transition-all duration-500
                 ${isSpeaking ? 'bg-green-500/20 animate-pulse [animation-delay:150ms]' : ''}
                 ${isThinking ? 'bg-blue-500/10 animate-spin-slow-reverse' : ''}
+                 ${isRecording ? 'bg-red-500/10 animate-pulse [animation-delay:150ms]' : ''}
             `}></div>
             
             {/* Core Avatar */}
@@ -30,44 +35,8 @@ const AIAvatar = ({ status }) => {
     );
 };
 
-// Polished SpeakControl
-const SpeakControl = ({ status, onStartRecording, onStopRecording }) => {
-    const isRecording = status === 'Recording...';
-    const canSpeak = status === 'Listening...';
-
-    const handleTouchStart = (e) => {
-        e.preventDefault();
-        if (canSpeak) onStartRecording();
-    };
-
-    const handleTouchEnd = (e) => {
-        e.preventDefault();
-        if (isRecording) onStopRecording();
-    };
-
-    return (
-        <button
-            onMouseDown={onStartRecording}
-            onMouseUp={onStopRecording}
-            onTouchStart={handleTouchStart}
-            onTouchEnd={handleTouchEnd}
-            disabled={!canSpeak && !isRecording}
-            className={`w-40 h-40 rounded-full transition-all duration-300 ease-in-out flex flex-col items-center justify-center text-center focus:outline-none focus:ring-4 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-blue-500/50 disabled:opacity-50 disabled:cursor-not-allowed
-                ${isRecording ? 'bg-red-600 scale-110 shadow-2xl' : (canSpeak ? 'bg-blue-600 hover:bg-blue-700 shadow-lg' : 'bg-gray-600')}
-            `}
-        >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-10 w-10 mb-2 text-white/80" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93V17h-2v-2.07A8.002 8.002 0 012 8V7a1 1 0 011-1h2a1 1 0 011 1v1a5 5 0 0010 0V7a1 1 0 011-1h2a1 1 0 011 1v1a8.002 8.002 0 01-5 7.93z" clipRule="evenodd" />
-            </svg>
-            <p className="text-white font-bold text-lg leading-tight">
-                {isRecording ? 'Listening' : (canSpeak ? 'Hold to Speak' : 'Please Wait')}
-            </p>
-        </button>
-    );
-};
-
 function App() {
-  const { interviewState, status, transcript, startInterview, startRecording, stopRecordingAndSend } = useInterviewSocket();
+  const { interviewState, status, transcript, startInterview } = useInterviewSocket();
 
   return (
     <div className="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4 font-sans antialiased">
@@ -98,13 +67,8 @@ function App() {
             {/* Right Column: Transcript & Controls */}
             <div className="flex flex-col bg-gray-800/50 rounded-2xl overflow-hidden border border-gray-700 shadow-2xl">
               <Transcript transcript={transcript} />
-              <div className="p-4 border-t border-gray-700 flex flex-col items-center space-y-4">
+              <div className="p-4 border-t border-gray-700 flex flex-col items-center justify-center h-28">
                   <AIStatus status={status} />
-                  <SpeakControl 
-                      status={status}
-                      onStartRecording={startRecording}
-                      onStopRecording={stopRecordingAndSend}
-                  />
               </div>
             </div>
           </div>
