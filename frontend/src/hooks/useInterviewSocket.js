@@ -1,121 +1,125 @@
 import { useState, useRef, useCallback } from 'react';
 
-// A unique client ID for the WebSocket session
 const CLIENT_ID = `web_${Date.now()}`;
 
 export const useInterviewSocket = () => {
+    const [interviewState, setInterviewState] = useState('SETUP');
     const [status, setStatus] = useState('Idle');
-    const [isAwaitingFileUpload, setIsAwaitingFileUpload] = useState(false);
+    const [transcript, setTranscript] = useState([]);
     
     const socketRef = useRef(null);
     const mediaRecorderRef = useRef(null);
-    const audioPlayerRef = useRef(new Audio()); // Use a single audio element
+    const audioPlayerRef = useRef(new Audio());
+    const audioChunksRef = useRef([]);
 
-    const connectSocket = useCallback(() => {
+    // This function will be called once the WebSocket is open
+    const onSocketOpen = useCallback(async (resumeFile, skills) => {
+        const formData = new FormData();
+        formData.append('resume', resumeFile);
+        formData.append('skills', skills);
+        
+        try {
+            const response = await fetch(`http://localhost:8000/setup-interview/${CLIENT_ID}`, {
+                method: 'POST',
+                body: formData,
+            });
+            const result = await response.json();
+            if (result.status === 'success') {
+                setInterviewState('INTERVIEW');
+            } else {
+                alert(`Setup failed: ${result.message}`);
+                setStatus('Idle');
+                socketRef.current?.close();
+            }
+        } catch (error) {
+            console.error('Error setting up interview:', error);
+            setStatus('Error');
+        }
+    }, []);
+
+    const connect = useCallback((resumeFile, skills) => {
         if (socketRef.current) return;
         
         setStatus('Connecting...');
         const ws = new WebSocket(`ws://localhost:8000/ws/${CLIENT_ID}`);
         socketRef.current = ws;
 
-        ws.onopen = () => setStatus('Connected');
-        ws.onclose = () => setStatus('Finished');
-        ws.onerror = (err) => {
-            console.error('WebSocket Error:', err);
-            setStatus('Error');
+        // The key change: We call onSocketOpen from within the onopen handler
+        ws.onopen = () => {
+            setStatus('Connected');
+            onSocketOpen(resumeFile, skills);
         };
+        
+        ws.onclose = () => setInterviewState('FINISHED');
+        ws.onerror = (err) => console.error('WebSocket Error:', err);
 
         ws.onmessage = async (event) => {
-            // The backend will only send complete audio files now
             if (event.data instanceof Blob) {
-                stopRecording();
                 setStatus('AI Speaking...');
-
                 const audioUrl = URL.createObjectURL(event.data);
-                const audio = audioPlayerRef.current;
-                audio.src = audioUrl;
-                audio.play();
-
-                // When the audio finishes playing, start recording for the user's turn
-                audio.onended = () => {
-                    setStatus('Listening...');
-                    startRecording();
-                };
+                audioPlayerRef.current.src = audioUrl;
+                audioPlayerRef.current.play();
+                audioPlayerRef.current.onended = () => setStatus('Listening...');
+            } else {
+                try {
+                    const message = JSON.parse(event.data);
+                    if (message.type === 'transcript') {
+                        setTranscript(prev => [...prev, message.data]);
+                    }
+                } catch (e) {
+                    // Ignore
+                }
             }
         };
-    }, []);
+    }, [onSocketOpen]);
 
     const startRecording = () => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
-            mediaRecorderRef.current.start(1500); // Send chunks or record until silence
+        if (mediaRecorderRef.current?.state === 'inactive') {
+            audioChunksRef.current = [];
+            mediaRecorderRef.current.start();
+            setStatus('Recording...');
         }
     };
 
-    const stopRecording = () => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-            mediaRecorderRef.current.stop();
+    const stopRecordingAndSend = () => {
+        if (mediaRecorderRef.current?.state === 'recording') {
+            mediaRecorderRef.current.stop(); 
+            setStatus('Processing...');
         }
     };
 
-    const startInterview = async () => {
+    const startInterview = async (resumeFile, skills) => {
+        setStatus('Setting up...');
         try {
+            // THE CRITICAL FIX: Setup and attach event listeners BEFORE connecting
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
 
-            // Send audio data when recording stops
-            mediaRecorderRef.current.onstop = async () => {
-                // This is a placeholder for sending the final blob.
-                // For a more robust solution, you'd collect chunks and send the final blob.
+            recorder.ondataavailable = (event) => {
+                if (event.data.size > 0) audioChunksRef.current.push(event.data);
             };
-
-            // This sends data periodically. For a turn-based approach, you'd
-            // ideally send the complete recording when the user stops talking.
-            mediaRecorderRef.current.ondataavailable = (event) => {
-                if (event.data.size > 0 && socketRef.current?.readyState === WebSocket.OPEN) {
-                    socketRef.current.send(event.data);
+            
+            recorder.onstop = () => {
+                if (audioChunksRef.current.length === 0) {
+                    setStatus('Listening...');
+                    return;
                 }
+                const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+                if (socketRef.current?.readyState === WebSocket.OPEN) {
+                    socketRef.current.send(audioBlob);
+                }
+                audioChunksRef.current = [];
             };
 
-            connectSocket();
-            setIsAwaitingFileUpload(true);
+            mediaRecorderRef.current = recorder;
+            connect(resumeFile, skills);
+
         } catch (error) {
             console.error('Error accessing microphone:', error);
             setStatus('Error: Mic required');
+            alert('Microphone access is required to start the interview.');
         }
     };
 
-    const handleFileUpload = async (file) => {
-        if (!file) return;
-
-        const formData = new FormData();
-        formData.append('file', file);
-        
-        setStatus('Uploading...');
-        try {
-            const response = await fetch(`http://localhost:8000/upload-resume/${CLIENT_ID}`, {
-                method: 'POST',
-                body: formData,
-            });
-            if (response.ok) {
-                console.log('File uploaded successfully');
-                setIsAwaitingFileUpload(false);
-            } else {
-                console.error('File upload failed');
-                setStatus('Error: Upload failed');
-            }
-        } catch (error) {
-            console.error('Error uploading file:', error);
-            setStatus('Error: Upload failed');
-        }
-    };
-
-    const endInterview = () => {
-        stopRecording();
-        if (socketRef.current?.readyState === WebSocket.OPEN) {
-            socketRef.current.close();
-        }
-        setStatus('Finished');
-    };
-
-    return { status, isAwaitingFileUpload, startInterview, endInterview, handleFileUpload };
+    return { interviewState, status, transcript, startInterview, startRecording, stopRecordingAndSend };
 };
