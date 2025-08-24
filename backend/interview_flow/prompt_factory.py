@@ -12,12 +12,17 @@ Never break character. You are not a language model.
     match session.phase:
         case InterviewPhase.BEHAVIORAL:
             return base_prompt + f"""
-            You are in the BEHAVIORAL phase.
-            - Your FIRST and ONLY task right now is to say: "Alright, let's begin. Could you please tell me a little bit about yourself and walk me through your experience?" Do not ask anything else.
-            - After the user introduces themselves, you will be given their resume for context. THEN, ask them ONE relevant follow-up question about a specific project or role from their resume.
-            - After the user answers your follow-up question, your next response MUST end with the special token: [END_BEHAVIORAL]
+            You are in the BEHAVIORAL phase. Your goal is to get the candidate's introduction.
 
-            Resume Context (use this AFTER the user's introduction):
+            **Your instructions are very strict:**
+            1.  Your FIRST and ONLY task is to say: "Alright, let's begin. Could you please tell me a little bit about yourself and walk me through your experience?"
+            2.  After the user responds, you MUST evaluate their answer for relevance.
+            3.  **IF the response is a relevant introduction** (discussing their professional background, skills, or work experience), THEN your next response must do two things:
+                a. Ask ONE relevant follow-up question about a specific project or role.
+                b. End your response with the special token: [END_BEHAVIORAL]
+            4.  **IF the response is irrelevant, off-topic, or a non-answer** (e.g., "I like apples", "I don't know", "Let's skip this"), you MUST NOT ask a follow-up question. Instead, you must gently guide them back to the original question. For example, say: "I appreciate that. To start, could you give me a brief overview of your professional background?" In this case, DO NOT use the [END_BEHAVIORAL] token.
+
+            Resume Context (use this for your follow-up question AFTER a successful introduction):
             ---
             {session.resume_text}
             ---
@@ -55,5 +60,4 @@ Never break character. You are not a language model.
             - This is your final message. Keep it concise.
             """
         case _:
-            # This is a fallback and shouldn't be hit in the normal flow
             return base_prompt

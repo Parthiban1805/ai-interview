@@ -11,7 +11,7 @@ from models.session import InterviewPhase
 from interview_flow.state_manager import create_session, get_session
 from interview_flow.prompt_factory import get_system_prompt
 from interview_flow.langchain_chain import create_interview_chain
-from services.elevenlabs_service import text_to_speech_batch
+from services.elevenlabs_service import text_to_speech_and_visemes_stream 
 from services.groq_service import speech_to_text
 from services.resume_parser import parse_resume
 
@@ -32,11 +32,18 @@ app.add_middleware(
 )
 
 async def speak(client_id: str, text: str):
-    """Generates audio and sends it over the WebSocket."""
-    audio_bytes = await text_to_speech_batch(text)
-    if audio_bytes:
-        await manager.send_bytes(audio_bytes, client_id)
-
+    """
+    Streams audio and viseme data over the WebSocket.
+    """
+    async for stream_type, data in text_to_speech_and_visemes_stream(text):
+        if stream_type == "audio":
+            await manager.send_bytes(data, client_id)
+        elif stream_type == "viseme":
+            # Send viseme data as a structured JSON message
+            await manager.send_json(
+                {"type": "viseme", "data": data},
+                client_id
+            )
 @app.post("/setup-interview/{client_id}")
 async def setup_interview(client_id: str, resume: UploadFile = File(...), skills: str = Form(...)):
     """

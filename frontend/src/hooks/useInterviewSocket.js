@@ -1,3 +1,4 @@
+// src/hooks/useInterviewSocket.js
 
 import { useState, useRef, useCallback } from 'react';
 
@@ -10,33 +11,37 @@ export const useInterviewSocket = () => {
     const [interviewState, setInterviewState] = useState('SETUP');
     const [status, setStatus] = useState('Idle');
     const [transcript, setTranscript] = useState([]);
-    
-    // Refs for WebSocket, MediaRecorder, and Audio
+    const [currentViseme, setCurrentViseme] = useState('sil');
+
+    // Refs
     const socketRef = useRef(null);
     const mediaRecorderRef = useRef(null);
     const audioPlayerRef = useRef(new Audio());
     const audioChunksRef = useRef([]);
-
-    // Refs for Voice Activity Detection (VAD)
     const audioContextRef = useRef(null);
     const analyserRef = useRef(null);
     const voiceActivityTimerRef = useRef(null);
     const animationFrameRef = useRef(null);
     const isSpeakingRef = useRef(false);
+    const audioQueue = useRef([]);
+    const isPlaying = useRef(false);
+    const visemeQueue = useRef([]);
+
+    // --- THE FIX IS HERE ---
+    // Reordered function definitions to respect dependency chain.
+    // Functions are now defined BEFORE they are used in other callbacks.
 
     const stopRecordingAndSend = useCallback(() => {
         if (mediaRecorderRef.current?.state === 'recording') {
             console.log("VAD: Silence confirmed. Stopping recording.");
             mediaRecorderRef.current.stop();
             setStatus('Processing...');
-            // Stop the VAD loop
             if (animationFrameRef.current) {
                 cancelAnimationFrame(animationFrameRef.current);
             }
         }
     }, []);
 
-    // The new VAD function that runs on every animation frame
     const detectVoice = useCallback(() => {
         const analyser = analyserRef.current;
         if (!analyser || mediaRecorderRef.current?.state !== 'recording') {
@@ -46,10 +51,8 @@ export const useInterviewSocket = () => {
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
         analyser.getByteTimeDomainData(dataArray);
 
-        // Check for any significant sound
         let hasVoice = false;
         for (let i = 0; i < dataArray.length; i++) {
-            // The values are 0-255, with 128 being the center (silence).
             if (Math.abs(dataArray[i] - 128) > (VOICE_THRESHOLD - 128)) {
                 hasVoice = true;
                 break;
@@ -57,25 +60,17 @@ export const useInterviewSocket = () => {
         }
 
         if (hasVoice) {
-            // User is speaking or there is noise
             if (!isSpeakingRef.current) {
-                console.log("VAD: Voice started.");
                 isSpeakingRef.current = true;
             }
-            // Clear any existing silence timer
             clearTimeout(voiceActivityTimerRef.current);
         } else {
-            // Silence is detected
             if (isSpeakingRef.current) {
-                // This is the moment the user just stopped speaking
-                console.log("VAD: Voice stopped, starting silence timer.");
                 isSpeakingRef.current = false;
-                // Start a timer to stop recording if silence persists
                 voiceActivityTimerRef.current = setTimeout(stopRecordingAndSend, SILENCE_THRESHOLD_MS);
             }
         }
 
-        // Continue the loop
         animationFrameRef.current = requestAnimationFrame(detectVoice);
     }, [stopRecordingAndSend]);
 
@@ -84,12 +79,46 @@ export const useInterviewSocket = () => {
             audioChunksRef.current = [];
             mediaRecorderRef.current.start();
             setStatus('Recording...');
-            console.log("VAD: Started recording and voice detection loop.");
-            // Start the VAD loop
             animationFrameRef.current = requestAnimationFrame(detectVoice);
         }
     }, [detectVoice]);
+    
+    const processAudioQueue = useCallback(() => {
+        if (isPlaying.current || audioQueue.current.length === 0) {
+            return;
+        }
+        isPlaying.current = true;
+        setStatus('Speaking...');
+        
+        const audioBlob = new Blob(audioQueue.current, { type: 'audio/mpeg' });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        audioPlayerRef.current.src = audioUrl;
+        audioPlayerRef.current.play();
+        
+        audioQueue.current = [];
 
+        audioPlayerRef.current.onended = () => {
+            isPlaying.current = false;
+            if (audioQueue.current.length > 0) {
+                processAudioQueue();
+            } else {
+                setCurrentViseme('sil');
+                startRecording();
+            }
+        };
+    }, [startRecording]);
+    
+    const processVisemeQueue = useCallback(() => {
+        if (visemeQueue.current.length > 0) {
+            const { viseme, offset } = visemeQueue.current.shift();
+            // Use a small adjustment to better sync visemes with buffered audio
+            const adjustedOffset = Math.max(0, offset / 1000 * 950);
+            setTimeout(() => {
+                setCurrentViseme(viseme);
+                processVisemeQueue();
+            }, adjustedOffset);
+        }
+    }, []);
 
     const onSocketOpen = useCallback(async (resumeFile, skills) => {
         const formData = new FormData();
@@ -131,31 +160,34 @@ export const useInterviewSocket = () => {
         ws.onerror = (err) => console.error('WebSocket Error:', err);
 
         ws.onmessage = async (event) => {
-            if (event.data instanceof Blob) {
-                setStatus('Speaking...');
-                const audioUrl = URL.createObjectURL(event.data);
-                audioPlayerRef.current.src = audioUrl;
-                audioPlayerRef.current.play();
-                audioPlayerRef.current.onended = () => {
-                    startRecording();
-                };
+           if (event.data instanceof Blob) {
+                audioQueue.current.push(event.data);
+                if (!isPlaying.current) {
+                    processAudioQueue();
+                }
             } else {
                 try {
                     const message = JSON.parse(event.data);
                     if (message.type === 'transcript') {
                         setTranscript(prev => [...prev, message.data]);
                     }
+                    else if (message.type === 'viseme') {
+                        const { viseme, offset } = message.data;
+                        visemeQueue.current.push({ viseme, offset });
+                        if (visemeQueue.current.length === 1) {
+                            processVisemeQueue();
+                        }
+                    }
                 } catch (e) { /* Ignore */ }
             }
         };
-    }, [onSocketOpen, startRecording]);
+    }, [onSocketOpen, processAudioQueue, processVisemeQueue]);
 
     const startInterview = async (resumeFile, skills) => {
         setStatus('Setting up...');
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            // Setup Web Audio API for VAD
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
             audioContextRef.current = audioContext;
             const source = audioContext.createMediaStreamSource(stream);
@@ -192,5 +224,5 @@ export const useInterviewSocket = () => {
         }
     };
 
-    return { interviewState, status, transcript, startInterview };
+    return { interviewState, status, transcript, startInterview, currentViseme };
 };

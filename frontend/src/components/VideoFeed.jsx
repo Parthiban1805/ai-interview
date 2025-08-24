@@ -1,44 +1,44 @@
-import React, { useEffect, useRef, useState } from 'react';
+// src/components/VideoFeed.jsx
+import React, { useRef, useEffect } from 'react';
 
-const VideoFeed = () => {
-    const videoRef = useRef(null);
-    const [isCameraReady, setIsCameraReady] = useState(false);
+const VideoFeed = ({ stream }) => { // Accept stream as a prop
+  const videoRef = useRef(null);
 
-    useEffect(() => {
-        let stream;
-        async function getCamera() {
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: true });
-                if (videoRef.current) {
-                    videoRef.current.srcObject = stream;
-                    setIsCameraReady(true);
-                }
-            } catch (err) {
-                console.error("Error accessing camera: ", err);
-                setIsCameraReady(false); 
-            }
-        }
-        getCamera();
+  useEffect(() => {
+    // If we have a stream and a video element, attach the stream
+    if (stream && videoRef.current) {
+      videoRef.current.srcObject = stream;
+    }
+    
+    // Cleanup function to stop tracks when the component unmounts or stream changes
+    return () => {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [stream]);
 
-        // Cleanup function to stop the camera when the component unmounts
-        return () => {
-            stream?.getTracks().forEach(track => track.stop());
-        };
-    }, []); // Empty dependency array ensures this runs only once
-
+  if (!stream) {
     return (
-        <div className="w-80 h-80 rounded-full overflow-hidden border-4 border-blue-500 shadow-lg mx-auto bg-gray-700 flex items-center justify-center">
-            {!isCameraReady && (
-                <p className="text-gray-400">Waiting for camera...</p>
-            )}
-            <video 
-                ref={videoRef} 
-                autoPlay 
-                muted 
-                className={`w-full h-full object-cover scale-x-[-1] transition-opacity duration-500 ${isCameraReady ? 'opacity-100' : 'opacity-0'}`}
-            />
+      <div className="w-full h-full bg-gray-800 flex items-center justify-center rounded-lg">
+        <div className="text-center text-gray-400">
+          <div className="text-2xl mb-2">📷</div>
+          <div className="text-xs">Awaiting camera...</div>
         </div>
+      </div>
     );
+  }
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted
+      className="w-full h-full object-cover bg-gray-800"
+      style={{ transform: 'scaleX(-1)' }} // Mirror effect
+    />
+  );
 };
 
 export default VideoFeed;
