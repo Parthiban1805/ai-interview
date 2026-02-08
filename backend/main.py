@@ -20,7 +20,7 @@ os.makedirs("uploads", exist_ok=True)
 
 origins = [
     "http://localhost:5173",
-    "http://localhost:3000", # A common port for React development
+    "http://localhost:3000", 
 ]
 
 app.add_middleware(
